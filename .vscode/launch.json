@@ -1,0 +1,45 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'run-check'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=run-check",
+                    "--package=run-check"
+                ],
+                "filter": {
+                    "name": "run-check",
+                    "kind": "bin"
+                }
+            },
+            "args": ["--check", "echo hello", "echo world"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'run-check'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=run-check",
+                    "--package=run-check"
+                ],
+                "filter": {
+                    "name": "run-check",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
