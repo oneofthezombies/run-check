@@ -1,4 +1,5 @@
 use clap::Parser;
+use colored::*;
 use std::env;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
@@ -28,10 +29,11 @@ struct Spawn {
 }
 
 fn spawn(
-    prefix: &'static str,
     arg: &String,
     stdout_tx: Sender<String>,
     stderr_tx: Sender<String>,
+    stdout_prefix: ColoredString,
+    stderr_prefix: ColoredString,
 ) -> Result<Spawn, Box<dyn Error>> {
     let program = if cfg!(target_os = "windows") {
         env::var("COMSPEC").unwrap_or("cmd.exe".to_string())
@@ -60,8 +62,8 @@ fn spawn(
         for line in stdout.lines() {
             stdout_tx
                 .send(format!(
-                    "[{}] {}",
-                    prefix,
+                    "{} {}",
+                    stdout_prefix,
                     line.expect("failed to read line from stdout")
                 ))
                 .unwrap();
@@ -73,8 +75,8 @@ fn spawn(
         for line in stderr.lines() {
             stderr_tx
                 .send(format!(
-                    "[{}] {}",
-                    prefix,
+                    "{} {}",
+                    stderr_prefix,
                     line.expect("failed to read line from stderr")
                 ))
                 .unwrap();
@@ -120,7 +122,10 @@ fn process_exit_status_fallback(exit_status: ExitStatus) -> i32 {
     #[cfg(target_os = "windows")]
     {
         exit_status.code().unwrap_or_else(|| {
-            eprintln!("error attempting to get exit code from check command");
+            eprintln!(
+                "{}",
+                "error attempting to get exit code from check command".bright_red()
+            );
             1
         })
     }
@@ -129,11 +134,17 @@ fn process_exit_status_fallback(exit_status: ExitStatus) -> i32 {
     {
         match exit_status.signal() {
             Some(signal) => {
-                eprintln!("check command exited with signal: {signal}");
+                eprintln!(
+                    "{}",
+                    format!("check command exited with signal: {signal}").bright_red()
+                );
                 128 + signal
             }
             None => {
-                eprintln!("error attempting to get exit code or signal from check command");
+                eprintln!(
+                    "{}",
+                    "error attempting to get exit code or signal from check command".bright_red()
+                );
                 1
             }
         }
@@ -145,8 +156,7 @@ fn cleanup(
     check: &mut Spawn,
     stdout_tx: Sender<String>,
     stderr_tx: Sender<String>,
-    stdout_rx_handle: thread::JoinHandle<()>,
-    stderr_rx_handle: thread::JoinHandle<()>,
+    rx_handle: thread::JoinHandle<()>,
 ) {
     kill_child(&mut run.child).expect("failed to kill run command");
     kill_child(&mut check.child).expect("failed to kill check command");
@@ -168,12 +178,7 @@ fn cleanup(
 
     drop(stdout_tx);
     drop(stderr_tx);
-    stdout_rx_handle
-        .join()
-        .expect("failed to join stdout rx thread");
-    stderr_rx_handle
-        .join()
-        .expect("failed to join stderr rx thread");
+    rx_handle.join().expect("failed to join rx thread");
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -185,18 +190,36 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (stdout_tx, stdout_rx) = channel();
     let (stderr_tx, stderr_rx) = channel();
 
-    let mut run = spawn("run", &cli.run, stdout_tx.clone(), stderr_tx.clone())?;
-    let mut check = spawn("check", &cli.check, stdout_tx.clone(), stderr_tx.clone())?;
+    let mut run = spawn(
+        &cli.run,
+        stdout_tx.clone(),
+        stderr_tx.clone(),
+        "RUN".bright_green().bold(),
+        "RUN".bright_yellow().bold(),
+    )?;
+    let mut check = spawn(
+        &cli.check,
+        stdout_tx.clone(),
+        stderr_tx.clone(),
+        "CHECK".bright_blue().bold(),
+        "CHECK".bright_red().bold(),
+    )?;
 
-    let stdout_rx_handle = thread::spawn(move || {
-        for line in stdout_rx {
-            println!("{}", line);
+    let rx_handle = thread::spawn(move || loop {
+        match stdout_rx.try_recv() {
+            Ok(line) => println!("{}", line),
+            Err(e) => match e {
+                std::sync::mpsc::TryRecvError::Empty => (),
+                std::sync::mpsc::TryRecvError::Disconnected => break,
+            },
         }
-    });
 
-    let stderr_rx_handle = thread::spawn(move || {
-        for line in stderr_rx {
-            eprintln!("{}", line);
+        match stderr_rx.try_recv() {
+            Ok(line) => eprintln!("{}", line),
+            Err(e) => match e {
+                std::sync::mpsc::TryRecvError::Empty => (),
+                std::sync::mpsc::TryRecvError::Disconnected => break,
+            },
         }
     });
 
@@ -206,9 +229,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             match status.code() {
                 Some(code) => {
                     if code == 0 {
-                        println!("check command exited with code: {code}");
+                        println!(
+                            "{}",
+                            format!("check command exited with code: {code}").bright_green()
+                        );
                     } else {
-                        eprintln!("check command exited with code: {code}");
+                        eprintln!(
+                            "{}",
+                            format!("check command exited with code: {code}").bright_red()
+                        );
                         exit_code = code;
                         break;
                     }
@@ -224,9 +253,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             match status.code() {
                 Some(code) => {
                     if code == 0 {
-                        println!("run command exited with code: {code}");
+                        println!(
+                            "{}",
+                            format!("run command exited with code: {code}").bright_green()
+                        );
                     } else {
-                        eprintln!("run command exited with code: {code}");
+                        eprintln!(
+                            "{}",
+                            format!("run command exited with code: {code}").bright_red()
+                        );
                     }
 
                     exit_code = code;
@@ -240,13 +275,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    cleanup(
-        &mut run,
-        &mut check,
-        stdout_tx,
-        stderr_tx,
-        stdout_rx_handle,
-        stderr_rx_handle,
-    );
+    cleanup(&mut run, &mut check, stdout_tx, stderr_tx, rx_handle);
     std::process::exit(exit_code);
 }
