@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["--check", "echo hello", "echo world"],
+            "args": ["--run", "cd /Users/hunhoekim/repo/test-bun && bun run index.ts", "--check", "cd /Users/hunhoekim/repo/test-bun && bun tsc"],
             "cwd": "${workspaceFolder}"
         },
         {
