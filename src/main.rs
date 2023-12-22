@@ -2,10 +2,12 @@ use clap::Parser;
 use std::env;
 use std::error::Error;
 use std::io::{BufRead, BufReader};
-use std::os::unix::process::ExitStatusExt;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
+
+#[cfg(not(target_os = "windows"))]
+use std::os::unix::process::ExitStatusExt;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -20,9 +22,9 @@ struct Cli {
 }
 
 struct Spawn {
-    child: std::process::Child,
-    stdout_tx_handle: Option<thread::JoinHandle<()>>,
-    stderr_tx_handle: Option<thread::JoinHandle<()>>,
+    child: Child,
+    stdout_tx_handle: Option<JoinHandle<()>>,
+    stderr_tx_handle: Option<JoinHandle<()>>,
 }
 
 fn spawn(
@@ -87,6 +89,57 @@ fn spawn(
     })
 }
 
+fn check_taskkill() -> Result<(), Box<dyn Error>> {
+    Command::new("taskkill")
+        .arg("/?")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    Ok(())
+}
+
+fn kill_child(child: &mut Child) -> Result<(), Box<dyn Error>> {
+    if cfg!(target_os = "windows") {
+        Command::new("taskkill")
+            .arg("/F")
+            .arg("/T")
+            .arg("/PID")
+            .arg(child.id().to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+    } else {
+        child.kill()?;
+    }
+    Ok(())
+}
+
+fn process_exit_status_fallback(exit_status: ExitStatus) -> i32 {
+    #[cfg(target_os = "windows")]
+    {
+        exit_status.code().unwrap_or_else(|| {
+            eprintln!("error attempting to get exit code from check command");
+            1
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        match exit_status.signal() {
+            Some(signal) => {
+                eprintln!("check command exited with signal: {signal}");
+                128 + signal
+            }
+            None => {
+                eprintln!("error attempting to get exit code or signal from check command");
+                1
+            }
+        }
+    }
+}
+
 fn cleanup(
     run: &mut Spawn,
     check: &mut Spawn,
@@ -95,8 +148,8 @@ fn cleanup(
     stdout_rx_handle: thread::JoinHandle<()>,
     stderr_rx_handle: thread::JoinHandle<()>,
 ) {
-    run.child.kill().expect("failed to kill run command");
-    check.child.kill().expect("failed to kill check command");
+    kill_child(&mut run.child).expect("failed to kill run command");
+    kill_child(&mut check.child).expect("failed to kill check command");
 
     run.stdout_tx_handle
         .take()
@@ -124,6 +177,10 @@ fn cleanup(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if cfg!(target_os = "windows") {
+        check_taskkill().expect("taskkill command must be available");
+    }
+
     let cli = Cli::parse();
     let (stdout_tx, stdout_rx) = channel();
     let (stderr_tx, stderr_rx) = channel();
@@ -156,18 +213,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         break;
                     }
                 }
-                None => match status.signal() {
-                    Some(signal) => {
-                        eprintln!("check command exited with signal: {signal}");
-                        exit_code = 128 + signal;
-                        break;
-                    }
-                    None => {
-                        eprintln!("error attempting to get exit code or signal from check command");
-                        exit_code = 1;
-                        break;
-                    }
-                },
+                None => {
+                    exit_code = process_exit_status_fallback(status);
+                    break;
+                }
             }
         }
 
@@ -183,18 +232,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     exit_code = code;
                     break;
                 }
-                None => match status.signal() {
-                    Some(signal) => {
-                        eprintln!("run command exited with signal: {signal}");
-                        exit_code = 128 + signal;
-                        break;
-                    }
-                    None => {
-                        eprintln!("error attempting to get exit code or signal from run command");
-                        exit_code = 1;
-                        break;
-                    }
-                },
+                None => {
+                    exit_code = process_exit_status_fallback(status);
+                    break;
+                }
             }
         }
     }
