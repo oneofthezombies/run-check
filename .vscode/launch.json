@@ -20,7 +20,7 @@
                 }
             },
             "args": ["--run", "cd /Users/hunhoekim/repo/test-bun && bun run index.ts", "--check", "cd /Users/hunhoekim/repo/test-bun && bun tsc"],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}/cli"
         },
         {
             "type": "lldb",
@@ -39,7 +39,7 @@
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}/cli"
         }
     ]
 }
